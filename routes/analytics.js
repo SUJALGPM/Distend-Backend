@@ -1,0 +1,212 @@
+const express = require('express');
+const Student = require('../models/Student');
+const Teacher = require('../models/Teacher');
+const Department = require('../models/Department');
+const Attendance = require('../models/Attendance');
+const Subject = require('../models/Subject');
+const { authMiddleware } = require('../middleware/auth');
+
+const router = express.Router();
+
+// Get system analytics overview with MapReduce processing
+router.get('/overview', authMiddleware, async (req, res) => {
+  try {
+    const startTime = Date.now();
+    
+    // Basic counts (fast queries)
+    const [totalStudents, totalTeachers, totalDepartments, totalSubjects] = await Promise.all([
+      Student.countDocuments(),
+      Teacher.countDocuments(),
+      Department.countDocuments(),
+      Subject.countDocuments()
+    ]);
+
+    // Use MapReduce for complex analytics
+    const MapReduceAnalytics = require('../services/mapReduceAnalytics');
+    const analytics = new MapReduceAnalytics();
+
+    // Run analytics in parallel
+    const [departmentAnalysis, subjectAnalysis, defaulterAnalysis] = await Promise.all([
+      analytics.departmentWiseAttendanceSummary(),
+      analytics.subjectLevelPerformanceAnalysis(),
+      analytics.defaulterPercentageAnalysis(75)
+    ]);
+
+    // Attendance stats for current month (optimized query)
+    const currentDate = new Date();
+    const currentMonth = (currentDate.getMonth() + 1).toString().padStart(2, "0");
+    const currentYear = currentDate.getFullYear();
+
+    const monthlyAttendance = await Attendance.aggregate([
+      {
+        $match: {
+          createdAtDate: { $regex: `/${currentMonth}/${currentYear}$` }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          present: {
+            $sum: {
+              $cond: [
+                { $in: ['$status', ['Present', 'Late']] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const attendanceRate = monthlyAttendance.length > 0 ? 
+      (monthlyAttendance[0].present / monthlyAttendance[0].total) * 100 : 0;
+
+    // Weekly attendance trend (optimized with aggregation)
+    const weeklyTrend = [];
+    const datePromises = [];
+    
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = `${date.getDate().toString().padStart(2, "0")}/${(date.getMonth() + 1).toString().padStart(2, "0")}/${date.getFullYear()}`;
+      
+      datePromises.push(
+        Attendance.aggregate([
+          { $match: { createdAtDate: dateStr } },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              present: {
+                $sum: {
+                  $cond: [
+                    { $in: ['$status', ['Present', 'Late']] },
+                    1,
+                    0
+                  ]
+                }
+              }
+            }
+          }
+        ]).then(result => ({
+          date: dateStr,
+          attendanceRate: result.length > 0 ? 
+            Math.round((result[0].present / result[0].total) * 10000) / 100 : 0
+        }))
+      );
+    }
+
+    const weeklyResults = await Promise.all(datePromises);
+    weeklyTrend.push(...weeklyResults);
+
+    // Combine all results
+    const response = {
+      overview: {
+        totalStudents,
+        totalTeachers,
+        totalDepartments,
+        totalSubjects,
+        currentAttendanceRate: Math.round(attendanceRate * 100) / 100,
+        processingTime: Date.now() - startTime,
+        nodeId: process.env.NODE_ID || 'node-1'
+      },
+      departmentStats: departmentAnalysis.results.map(dept => ({
+        name: dept.departmentName,
+        studentCount: dept.totalStudents,
+        averageAttendance: Math.round(dept.averageAttendance * 100) / 100,
+        totalClasses: dept.totalClasses
+      })),
+      weeklyTrend,
+      mapReduceAnalytics: {
+        departmentSummary: departmentAnalysis.summary,
+        subjectPerformance: subjectAnalysis.summary,
+        defaulterAnalysis: {
+          totalDefaulters: defaulterAnalysis.totalDefaulters,
+          defaulterPercentage: Math.round(defaulterAnalysis.overallDefaulterPercentage * 100) / 100,
+          departmentBreakdown: defaulterAnalysis.departmentBreakdown
+        }
+      },
+      performance: {
+        totalProcessingTime: Date.now() - startTime,
+        parallelProcessing: true,
+        workersUsed: require('os').cpus().length
+      }
+    };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Analytics overview error:', error);
+    res.status(500).json({ 
+      message: 'Server error',
+      error: error.message,
+      processingTime: Date.now() - (req.startTime || Date.now())
+    });
+  }
+});
+
+// Get subject-wise attendance analytics
+router.get('/subjects', authMiddleware, async (req, res) => {
+  try {
+    const subjects = await Subject.find().populate('departmentId', 'name');
+    const subjectAnalytics = [];
+
+    for (const subject of subjects) {
+      const attendance = await Attendance.find({ subjectId: subject._id });
+      const presentCount = attendance.filter(a => a.status === 'Present' || a.status === 'Late').length;
+      const totalCount = attendance.length;
+      const attendanceRate = totalCount > 0 ? (presentCount / totalCount) * 100 : 0;
+
+      subjectAnalytics.push({
+        subject: {
+          _id: subject._id,
+          name: subject.name,
+          code: subject.code,
+          department: subject.departmentId?.name
+        },
+        totalClasses: totalCount,
+        averageAttendance: Math.round(attendanceRate * 100) / 100
+      });
+    }
+
+    res.json(subjectAnalytics);
+
+  } catch (error) {
+    console.error('Subject analytics error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get teacher performance analytics
+router.get('/teachers', authMiddleware, async (req, res) => {
+  try {
+    const teachers = await Teacher.find();
+    const teacherAnalytics = [];
+
+    for (const teacher of teachers) {
+      const classesRecorded = await Attendance.countDocuments({ recordedBy: teacher._id });
+      const uniqueSubjects = await Attendance.distinct('subjectId', { recordedBy: teacher._id });
+      
+      teacherAnalytics.push({
+        teacher: {
+          _id: teacher._id,
+          name: teacher.teacherName,
+          email: teacher.teacherEmail,
+          department: teacher.department
+        },
+        classesRecorded,
+        subjectsHandled: uniqueSubjects.length
+      });
+    }
+
+    res.json(teacherAnalytics);
+
+  } catch (error) {
+    console.error('Teacher analytics error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+module.exports = router;
