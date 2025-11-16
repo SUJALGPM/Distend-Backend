@@ -1,0 +1,13 @@
+{
+  "id": "emergency_1762794456001",
+  "type": "emergency",
+  "timestamp": "2025-11-10T17:07:36.001Z",
+  "nodeId": "node-3",
+  "data": {
+    "error": "listen EADDRINUSE: address already in use :::5002",
+    "stack": "Error: listen EADDRINUSE: address already in use :::5002\n    at Server.setupListenHandle [as _listen2] (node:net:1940:16)\n    at listenInCluster (node:net:1997:12)\n    at Server.listen (node:net:2102:7)\n    at startServer (C:\\Users\\Nethra\\Desktop\\ams\\backend\\server.js:230:12)",
+    "timestamp": "2025-11-10T17:07:36.000Z"
+  },
+  "operationCount": 0,
+  "hash": "312e816d5060ec005eb5db7e03c643e6d136e64b42a7c9af8e5ba70058b1d5f8"
+}

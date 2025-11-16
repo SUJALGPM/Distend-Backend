@@ -112,17 +112,42 @@ module.exports = (io) => {
   // Socket authentication middleware
   io.use((socket, next) => {
     try {
-      const token = socket.handshake.auth.token;
+      let token = socket.handshake.auth.token;
+      
+      // If token is 'use-cookie' or invalid, try to get from cookies
+      if (!token || token === 'use-cookie' || token === 'authenticated') {
+        console.log('Reading token from cookie...');
+        
+        if (socket.handshake.headers.cookie) {
+          const cookies = socket.handshake.headers.cookie.split(';');
+          for (const cookie of cookies) {
+            const [name, value] = cookie.trim().split('=');
+            if (name === 'token') {
+              token = value;
+              console.log('Token found in cookie');
+              break;
+            }
+          }
+        }
+      }
+      
       if (!token) {
-        return next(new Error('Authentication error'));
+        console.log('❌ Socket connection rejected: No token provided');
+        console.log('   Auth token:', socket.handshake.auth.token);
+        console.log('   Cookies:', socket.handshake.headers.cookie);
+        return next(new Error('Authentication error: No token'));
       }
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
       socket.user = decoded;
       socket.lamportTime = 0;
+      
+      console.log(`✅ Socket authenticated: ${decoded.email} (${decoded.role})`);
       next();
     } catch (error) {
-      next(new Error('Authentication error'));
+      console.log('❌ Socket authentication failed:', error.message);
+      console.log('   Token:', socket.handshake.auth.token);
+      next(new Error('Authentication error: ' + error.message));
     }
   });
 
@@ -178,6 +203,13 @@ module.exports = (io) => {
       
       // Update Lamport clock
       const currentTime = lamportClock.update(clientLamportTime || 0);
+      
+      console.log(`\n⏰ Lamport Clock Update:`);
+      console.log(`   Event: mark-attendance-live`);
+      console.log(`   Client Time: ${clientLamportTime || 0}`);
+      console.log(`   Server Time Before: ${lamportClock.time - 1}`);
+      console.log(`   Server Time After: ${currentTime}`);
+      console.log(`   Node: ${process.env.NODE_ID || 'node-1'}`);
       
       const attendanceUpdate = {
         subjectId,
@@ -387,6 +419,8 @@ module.exports = (io) => {
     const roleSockets = await io.in(role).fetchSockets();
     const currentTime = lamportClock.tick();
     
+    console.log(`   🔔 Socket.IO Broadcast: ${event} → ${role} (Lamport: ${currentTime})`);
+    
     const enhancedData = {
       ...data,
       lamportTime: currentTime,
@@ -406,6 +440,8 @@ module.exports = (io) => {
   const emitToUserWithRetry = async (userId, event, data) => {
     const userSockets = await io.in(`user_${userId}`).fetchSockets();
     const currentTime = lamportClock.tick();
+    
+    console.log(`   🔔 Socket.IO Message: ${event} → user_${userId} (Lamport: ${currentTime})`);
     
     const enhancedData = {
       ...data,

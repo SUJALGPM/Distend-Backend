@@ -214,6 +214,7 @@ router.post('/departments', authMiddleware, requireRole(['admin']), async (req, 
   }
 });
 
+
 // Get all departments (accessible by authenticated users for dropdowns)
 router.get('/departments', authMiddleware, async (req, res) => {
   try {

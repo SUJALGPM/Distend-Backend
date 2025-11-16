@@ -504,6 +504,177 @@ class FaultToleranceManager extends EventEmitter {
     this.isLeader = isLeader;
     console.log(`Node ${process.env.NODE_ID} is ${isLeader ? 'now' : 'no longer'} the leader`);
   }
+
+  // Bully Algorithm for Leader Election
+  async startLeaderElection(isReelection = false) {
+    const nodeId = process.env.NODE_ID || 'node-1';
+    const workerId = parseInt(process.env.WORKER_ID || '1');
+    
+    // Wait for system to stabilize (only on initial startup)
+    if (!isReelection) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    
+    console.log(`\n🗳️  ${isReelection ? 'RE-ELECTION' : 'Starting leader election'} (Bully Algorithm)...`);
+    console.log(`   My ID: ${nodeId} (Worker ID: ${workerId})`);
+    
+    // In Bully Algorithm, node with highest ID becomes leader
+    const allNodeIds = [1, 2, 3, 4];
+    const higherNodes = allNodeIds.filter(id => id > workerId);
+    
+    if (higherNodes.length === 0) {
+      // No higher nodes, I am the leader
+      this.setLeaderStatus(true);
+      console.log(`   ✓ I have the highest ID, I am the LEADER!`);
+      await this.broadcastLeaderAnnouncement();
+    } else {
+      // There are higher nodes, check if they're alive
+      console.log(`   Checking higher nodes: ${higherNodes.join(', ')}`);
+      
+      let higherNodeAlive = false;
+      for (const nodeNum of higherNodes) {
+        const port = 5000 + nodeNum - 1;
+        try {
+          console.log(`   Pinging http://localhost:${port}/health...`);
+          
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 2000);
+          
+          const response = await fetch(`http://localhost:${port}/health`, { 
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json' }
+          });
+          
+          clearTimeout(timeoutId);
+          
+          if (response.ok) {
+            const data = await response.json();
+            higherNodeAlive = true;
+            console.log(`   ✓ Node-${nodeNum} is ALIVE (port ${port})`);
+            break;
+          }
+        } catch (error) {
+          console.log(`   ✗ Node-${nodeNum} not responding (${error.message})`);
+        }
+      }
+      
+      if (!higherNodeAlive) {
+        // All higher nodes are dead, I become leader
+        this.setLeaderStatus(true);
+        console.log(`   ✓ All higher nodes are down, I am the new LEADER!`);
+        await this.broadcastLeaderAnnouncement();
+      } else {
+        // Higher node is alive, I am not leader
+        this.setLeaderStatus(false);
+        console.log(`   ✓ Higher node is alive, I am a FOLLOWER`);
+      }
+    }
+  }
+
+  async broadcastLeaderAnnouncement() {
+    const workerId = parseInt(process.env.WORKER_ID || '1');
+    const allNodeIds = [1, 2, 3, 4];
+    const lowerNodes = allNodeIds.filter(id => id < workerId);
+    
+    console.log(`\n📢 Broadcasting: I am the leader to nodes: ${lowerNodes.join(', ')}`);
+    
+    // Tell all lower nodes to step down
+    for (const nodeNum of lowerNodes) {
+      const port = 5000 + nodeNum - 1;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1000);
+        
+        await fetch(`http://localhost:${port}/api/leader/stepdown`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            newLeaderId: workerId,
+            message: 'Higher node is now leader'
+          })
+        });
+        
+        clearTimeout(timeoutId);
+        console.log(`   ✓ Notified Node-${nodeNum} to step down`);
+      } catch (error) {
+        console.log(`   ✗ Could not notify Node-${nodeNum}: ${error.message}`);
+      }
+    }
+  }
+
+  // Handle step down request from higher node
+  handleStepDownRequest(newLeaderId) {
+    const workerId = parseInt(process.env.WORKER_ID || '1');
+    
+    if (newLeaderId > workerId && this.isLeader) {
+      console.log(`\n⬇️  Stepping down: Node-${newLeaderId} is the new leader`);
+      this.setLeaderStatus(false);
+    }
+  }
+
+  // Periodic leader heartbeat check and failure detection
+  startLeaderHeartbeat() {
+    // Leader sends heartbeat
+    setInterval(() => {
+      if (this.isLeader) {
+        console.log(`💓 Leader heartbeat from ${process.env.NODE_ID}`);
+      }
+    }, 30000); // Every 30 seconds
+    
+    // Followers check if leader is still alive
+    setInterval(async () => {
+      if (!this.isLeader) {
+        await this.checkLeaderHealth();
+      }
+    }, 10000); // Check every 10 seconds
+  }
+
+  // Check if the current leader is still alive
+  async checkLeaderHealth() {
+    const workerId = parseInt(process.env.WORKER_ID || '1');
+    const allNodeIds = [1, 2, 3, 4];
+    const higherNodes = allNodeIds.filter(id => id > workerId);
+    
+    if (higherNodes.length === 0) {
+      // I'm the highest node, I should be leader
+      if (!this.isLeader) {
+        console.log(`\n⚠️  I'm the highest node but not leader, starting election...`);
+        await this.startLeaderElection(true);
+      }
+      return;
+    }
+    
+    // Check if any higher node is alive
+    let higherNodeAlive = false;
+    for (const nodeNum of higherNodes) {
+      const port = 5000 + nodeNum - 1;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        
+        const response = await fetch(`http://localhost:${port}/health`, { 
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          higherNodeAlive = true;
+          break;
+        }
+      } catch (error) {
+        // Node is down, continue checking
+      }
+    }
+    
+    if (!higherNodeAlive) {
+      // All higher nodes are down, start election
+      console.log(`\n🚨 Leader failure detected! Starting new election...`);
+      await this.startLeaderElection(true);
+    }
+  }
 }
 
 module.exports = FaultToleranceManager;

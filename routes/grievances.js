@@ -16,6 +16,15 @@ router.post('/submit', authMiddleware, upload.array('attachments', 5), async (re
   try {
     const { subjectId, title, description } = req.body;
     const studentId = req.user.userId;
+    
+    // Get Lamport Clock timestamp
+    const lamportTime = req.io.lamportClock ? req.io.lamportClock.tick() : 0;
+    
+    console.log(`\n⏰ Lamport Clock - Grievance Submission`);
+    console.log(`   Student: ${studentId}`);
+    console.log(`   Subject: ${subjectId}`);
+    console.log(`   Lamport Time: ${lamportTime}`);
+    console.log(`   Node: ${process.env.NODE_ID || 'node-1'}\n`);
 
     const attachments = req.files ? req.files.map(file => file.filename) : [];
 

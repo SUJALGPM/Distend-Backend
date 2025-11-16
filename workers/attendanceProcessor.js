@@ -88,18 +88,25 @@ if (isMainThread) {
     const errors = [];
 
     // Process CSV data in parallel chunks
-    const chunkSize = 50;
+    const chunkSize = 20; // Smaller chunks for better visibility
     const chunks = [];
     
     for (let i = 0; i < csvData.length; i += chunkSize) {
       chunks.push(csvData.slice(i, i + chunkSize));
     }
 
+    console.log(`\n📦 Splitting ${csvData.length} records into ${chunks.length} chunks of ${chunkSize}`);
+    console.log(`🔄 Processing ${chunks.length} chunks in parallel using worker threads...\n`);
+
     const Student = require('../models/Student');
     const Attendance = require('../models/Attendance');
 
+    const startTime = Date.now();
+
     // Process chunks in parallel
     const chunkPromises = chunks.map(async (chunk, chunkIndex) => {
+      const chunkStart = Date.now();
+      console.log(`   Thread ${chunkIndex + 1}/${chunks.length}: Processing records ${chunkIndex * chunkSize + 1}-${Math.min((chunkIndex + 1) * chunkSize, csvData.length)}...`);
       const chunkResults = [];
       const chunkErrors = [];
 
@@ -159,11 +166,17 @@ if (isMainThread) {
         }
       }
 
+      const chunkTime = Date.now() - chunkStart;
+      console.log(`   ✓ Thread ${chunkIndex + 1}/${chunks.length}: Completed in ${chunkTime}ms (${chunkResults.length} success, ${chunkErrors.length} errors)`);
+      
       return { results: chunkResults, errors: chunkErrors };
     });
 
     // Wait for all chunks to complete
     const chunkResults = await Promise.all(chunkPromises);
+    
+    const totalTime = Date.now() - startTime;
+    console.log(`\n✅ All ${chunks.length} threads completed in ${totalTime}ms`);
     
     // Combine results
     chunkResults.forEach(({ results: chunkRes, errors: chunkErr }) => {
@@ -171,12 +184,16 @@ if (isMainThread) {
       errors.push(...chunkErr);
     });
 
+    console.log(`📊 Final Results: ${results.length} records processed, ${errors.length} errors\n`);
+
     return {
       success: true,
       recordsProcessed: results.length,
       errors: errors.length,
       results,
-      errorDetails: errors
+      errorDetails: errors,
+      parallelChunks: chunks.length,
+      processingTime: totalTime
     };
   }
 

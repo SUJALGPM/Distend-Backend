@@ -23,7 +23,11 @@ function Start-Node {
     Start-Sleep -Seconds 2
 }
 
-# Start 4 nodes
+# Start 4 nodes - Leader will be elected via Bully Algorithm
+Write-Host "Starting all nodes..." -ForegroundColor Cyan
+Write-Host "Leader will be elected automatically (Node-4 should win)" -ForegroundColor Yellow
+Write-Host ""
+
 Start-Node -Port 5000 -NodeId "node-1" -WorkerId 1
 Start-Node -Port 5001 -NodeId "node-2" -WorkerId 2
 Start-Node -Port 5002 -NodeId "node-3" -WorkerId 3
